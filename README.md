@@ -1,10 +1,10 @@
 # autobatch
 
-`autobatch` finds one integer CUDA setting for a PyTorch workload. The setting can be a
+`autobatch` tunes an integer hyperparameter for a PyTorch CUDA workload. The setting can be a
 batch size, chunk size, tile size, beam width, candidate count, token block count, or any
-other positive integer whose CUDA memory feasibility is monotone over the declared domain.
+other positive integer whose CUDA memory feasibility is monotone.
 
-The public success path returns one integer:
+`autobatch.find` is the single entrypoint that returns the tuned hyperparameter as an integer. Example use:
 
 ```python
 import autobatch
@@ -24,8 +24,5 @@ value = autobatch.find(
 )
 ```
 
-The package runs each probe in a worker process, classifies CUDA OOM inside the package,
-records PyTorch peak allocated and reserved memory, validates memory headroom, and
-revalidates cache hits before returning them.
-
-Timed goals evaluate the declared finite domain exactly.
+The package runs each probe in a separate worker process, classifies CUDA OOM,
+records PyTorch peak allocated and reserved memory, validates memory headroom, and caches tuned values.
