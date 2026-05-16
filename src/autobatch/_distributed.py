@@ -104,6 +104,7 @@ class DistributedCache:
         return first
 
     def write_value(self, value: int) -> None:
+        validate_distributed_selection(value, self.collectives)
         self.cache.write_value(value)
 
 
@@ -195,18 +196,31 @@ def _first_status(
     outcomes: Sequence[ProbeOutcome],
     status: str,
 ) -> ProbeOutcome:
+    selected = None
+
     for outcome in outcomes:
         if outcome.status == status:
-            return ProbeOutcome(
-                status=status,
-                value=value,
-                devices=outcome.devices,
-                timing_seconds=outcome.timing_seconds,
-                steps_completed=outcome.steps_completed,
-                reason=outcome.reason,
-                exception_type=outcome.exception_type,
-                exception_message=outcome.exception_message,
-            )
+            if outcome.reason not in {
+                "distributed_peer_unsafe",
+                "distributed_peer_failed",
+            }:
+                selected = outcome
+                break
+
+            if selected is None:
+                selected = outcome
+
+    if selected is not None:
+        return ProbeOutcome(
+            status=status,
+            value=value,
+            devices=selected.devices,
+            timing_seconds=selected.timing_seconds,
+            steps_completed=selected.steps_completed,
+            reason=selected.reason,
+            exception_type=selected.exception_type,
+            exception_message=selected.exception_message,
+        )
 
     msg = "distributed reduced status is missing from gathered outcomes"
     raise DistributedError(msg)

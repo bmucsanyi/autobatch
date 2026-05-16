@@ -83,6 +83,14 @@ def _validate_devices(devices: object) -> list[int]:
             msg = "devices must be an integer list"
             raise InvalidConfigurationError(msg)
 
+        if device < 0:
+            msg = "devices must be non-negative"
+            raise InvalidConfigurationError(msg)
+
+        if device in selected_devices:
+            msg = "devices must not contain duplicates"
+            raise InvalidConfigurationError(msg)
+
         selected_devices.append(device)
 
     if len(selected_devices) == 0:

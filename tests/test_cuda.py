@@ -21,10 +21,21 @@ def test_select_devices_sets_declared_device(monkeypatch: pytest.MonkeyPatch) ->
         selected.append(device)
 
     monkeypatch.setattr("autobatch._cuda.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("autobatch._cuda.torch.cuda.device_count", lambda: 4)
     monkeypatch.setattr("autobatch._cuda.torch.cuda.set_device", set_device)
 
     assert select_devices([2, 3]) == [2, 3]
     assert selected == [2]
+
+
+def test_select_devices_rejects_out_of_range_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("autobatch._cuda.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("autobatch._cuda.torch.cuda.device_count", lambda: 2)
+
+    with pytest.raises(InvalidConfigurationError, match="device range"):
+        select_devices([2])
 
 
 def test_configure_devices_selects_declared_devices(
@@ -36,6 +47,7 @@ def test_configure_devices_selects_declared_devices(
         selected.append(device)
 
     monkeypatch.setattr("autobatch._cuda.torch.cuda.is_available", lambda: True)
+    monkeypatch.setattr("autobatch._cuda.torch.cuda.device_count", lambda: 4)
     monkeypatch.setattr("autobatch._cuda.torch.cuda.set_device", set_device)
 
     assert configure_devices([2, 3]) == [2, 3]

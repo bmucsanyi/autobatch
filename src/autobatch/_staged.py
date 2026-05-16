@@ -144,12 +144,11 @@ class DistributedStagedProbeRunner:
 
             if reduced_code != _STAGE_SAFE:
                 active = False
-
-                if result.status == "safe":
-                    result = _result_for_reduced_code(
-                        reduced_code,
-                        local_result=local_result,
-                    )
+                result = _select_stage_result(
+                    current=result,
+                    reduced_code=reduced_code,
+                    local_result=local_result,
+                )
 
             sync_result = _run_stage_sync(stage.sync, value, active)
             sync_code = _code_for_result(sync_result)
@@ -157,12 +156,11 @@ class DistributedStagedProbeRunner:
 
             if reduced_sync_code != _STAGE_SAFE:
                 active = False
-
-                if result.status == "safe":
-                    result = _result_for_reduced_code(
-                        reduced_sync_code,
-                        local_result=sync_result,
-                    )
+                result = _select_stage_result(
+                    current=result,
+                    reduced_code=reduced_sync_code,
+                    local_result=sync_result,
+                )
 
         return result
 
@@ -249,6 +247,21 @@ def _result_for_reduced_code(
 
     msg = "staged probe reduced status is invalid"
     raise ProbeError(msg)
+
+
+def _select_stage_result(
+    *,
+    current: _StageResult,
+    reduced_code: int,
+    local_result: _StageResult,
+) -> _StageResult:
+    if current.status == "safe":
+        return _result_for_reduced_code(reduced_code, local_result=local_result)
+
+    if reduced_code > _code_for_result(current):
+        return _result_for_reduced_code(reduced_code, local_result=local_result)
+
+    return current
 
 
 def _outcome_from_stage_result(value: int, result: _StageResult) -> ProbeOutcome:

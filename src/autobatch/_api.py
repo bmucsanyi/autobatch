@@ -63,6 +63,9 @@ def _find_distributed(config: FindConfig) -> int:
             cache=DistributedCache(Cache(config.cache_key), collectives),
         )
 
+        if not config.goal.requires_timing():
+            return value
+
         return validate_distributed_selection(value, collectives)
     finally:
         collectives.close()

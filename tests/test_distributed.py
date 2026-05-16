@@ -142,6 +142,26 @@ def test_reduce_probe_outcome_returns_unsafe_if_any_rank_is_unsafe() -> None:
     assert collectives.mapping_inputs == [_outcome_to_data(local)]
 
 
+def test_reduce_probe_outcome_prefers_concrete_unsafe_reason() -> None:
+    local = ProbeOutcome(status="unsafe", value=4, reason="distributed_peer_unsafe")
+    unsafe = ProbeOutcome(
+        status="unsafe",
+        value=4,
+        reason="cuda_oom",
+        exception_message="CUDA out of memory",
+    )
+    collectives = Collectives(status_code=1, outcomes=(local, unsafe))
+
+    outcome = reduce_probe_outcome(
+        value=4,
+        local=local,
+        collectives=collectives,
+    )
+
+    assert outcome.reason == "cuda_oom"
+    assert outcome.exception_message == "CUDA out of memory"
+
+
 def test_reduce_probe_outcome_returns_failed_if_any_rank_failed() -> None:
     local = ProbeOutcome(status="safe", value=4, steps_completed=1)
     failed = ProbeOutcome(
@@ -162,6 +182,26 @@ def test_reduce_probe_outcome_returns_failed_if_any_rank_failed() -> None:
     assert outcome.exception_message == "bad operation"
 
 
+def test_reduce_probe_outcome_prefers_concrete_failed_reason() -> None:
+    local = ProbeOutcome(status="failed", value=4, reason="distributed_peer_failed")
+    failed = ProbeOutcome(
+        status="failed",
+        value=4,
+        reason="probe_exception",
+        exception_message="bad operation",
+    )
+    collectives = Collectives(status_code=2, outcomes=(local, failed))
+
+    outcome = reduce_probe_outcome(
+        value=4,
+        local=local,
+        collectives=collectives,
+    )
+
+    assert outcome.reason == "probe_exception"
+    assert outcome.exception_message == "bad operation"
+
+
 def test_distributed_cache_uses_value_only_when_all_ranks_match() -> None:
     local_cache = Cache(8)
     collectives = Collectives(status_code=0, outcomes=(), gathered=(8, 8))
@@ -177,6 +217,17 @@ def test_distributed_cache_rejects_divergent_rank_values() -> None:
 
     with pytest.raises(DistributedError, match="cache values differ"):
         cache.read_value()
+
+
+def test_distributed_cache_rejects_divergent_writes_before_mutating() -> None:
+    local_cache = Cache(None)
+    collectives = Collectives(status_code=0, outcomes=(), gathered=(2, 3))
+    cache = DistributedCache(local_cache, collectives)
+
+    with pytest.raises(DistributedError, match="selected different values"):
+        cache.write_value(2)
+
+    assert local_cache.writes == []
 
 
 def noop_probe(value: int) -> None:

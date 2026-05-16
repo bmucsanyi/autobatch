@@ -22,6 +22,13 @@ def select_devices(devices: list[int]) -> list[int]:
         msg = "CUDA is required"
         raise InvalidConfigurationError(msg)
 
+    device_count = torch.cuda.device_count()
+
+    for device in devices:
+        if device >= device_count:
+            msg = "device id is outside the CUDA device range"
+            raise InvalidConfigurationError(msg)
+
     torch.cuda.set_device(devices[0])
 
     return devices

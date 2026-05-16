@@ -189,3 +189,30 @@ def test_distributed_staged_probe_drains_remaining_syncs_after_sync_error(
         ("first_sync", 3, True),
         ("second_sync", 3, False),
     ]
+
+
+def test_distributed_staged_probe_reports_sync_failure_after_oom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patch_cuda(monkeypatch)
+
+    def local(value: int) -> None:
+        _ = value
+        msg = "CUDA out of memory"
+        raise RuntimeError(msg)
+
+    def sync(value: int, active: bool) -> None:
+        _ = value
+        _ = active
+        msg = "bad placeholder sync"
+        raise RuntimeError(msg)
+
+    staged = StagedProbe([ProbeStage(local, sync)])
+    runner = DistributedStagedProbeRunner(
+        make_config(staged),
+        Collectives((1, 2, 2)),
+    )
+    outcome = runner.probe(3, timed=False)
+
+    assert outcome.status == "failed"
+    assert outcome.exception_message == "bad placeholder sync"

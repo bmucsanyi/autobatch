@@ -123,7 +123,7 @@ def test_find_rejects_cached_value_outside_domain(
     assert runner.calls == []
 
 
-def test_timing_goal_revalidates_cached_value_with_timing(
+def test_timing_goal_ignores_cached_value_and_scans_domain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = TimingRunner()

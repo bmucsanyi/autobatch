@@ -17,25 +17,30 @@ def select_value(
     probe: _ProbeRunner,
     cache: _Cache,
 ) -> int:
-    cached = cache.read_value()
+    requires_timing = config.goal.requires_timing()
 
-    if not config.goal.requires_timing() and cached is not None:
-        if cached not in config.domain.values:
-            msg = "cached value is outside the declared domain"
-            raise InvalidConfigurationError(msg)
+    if not requires_timing:
+        cached = cache.read_value()
 
-        outcome = probe.probe(cached, timed=config.goal.requires_timing())
+        if cached is not None:
+            if cached not in config.domain.values:
+                msg = "cached value is outside the declared domain"
+                raise InvalidConfigurationError(msg)
 
-        if outcome.status == "safe":
-            return cached
+            outcome = probe.probe(cached, timed=False)
 
-        raise_for_bad_outcome(outcome)
+            if outcome.status == "safe":
+                return cached
+
+            raise_for_bad_outcome(outcome)
 
     value = search(
         domain=config.domain,
         goal=config.goal,
         runner=probe,
     )
-    cache.write_value(value)
+
+    if not requires_timing:
+        cache.write_value(value)
 
     return value

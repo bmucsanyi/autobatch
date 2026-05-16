@@ -46,6 +46,32 @@ def test_config_rejects_bad_devices() -> None:
         )
 
 
+def test_config_rejects_negative_devices() -> None:
+    with pytest.raises(InvalidConfigurationError, match="non-negative"):
+        validate_config(
+            probe=noop_probe,
+            values=[1, 2],
+            goal=Goal.largest_safe(),
+            cache_key=("config-devices", "negative"),
+            warmup_steps=1,
+            measure_steps=1,
+            devices=[-1],
+        )
+
+
+def test_config_rejects_duplicate_devices() -> None:
+    with pytest.raises(InvalidConfigurationError, match="duplicates"):
+        validate_config(
+            probe=noop_probe,
+            values=[1, 2],
+            goal=Goal.largest_safe(),
+            cache_key=("config-devices", "duplicate"),
+            warmup_steps=1,
+            measure_steps=1,
+            devices=[0, 0],
+        )
+
+
 def test_config_rejects_non_callable_probe() -> None:
     with pytest.raises(InvalidConfigurationError):
         validate_config(
