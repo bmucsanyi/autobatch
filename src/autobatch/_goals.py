@@ -1,3 +1,5 @@
+import math
+
 from autobatch._errors import InvalidConfigurationError
 
 
@@ -10,14 +12,10 @@ class Goal:
         *,
         target_per_second: float | None,
         max_seconds: float | None,
-        direction: str | None,
-        tie: str | None,
     ) -> None:
         self.kind = kind
         self.target_per_second = target_per_second
         self.max_seconds = max_seconds
-        self.direction = direction
-        self.tie = tie
         self._validate()
 
     @classmethod
@@ -26,8 +24,6 @@ class Goal:
             "largest_safe",
             target_per_second=None,
             max_seconds=None,
-            direction=None,
-            tie=None,
         )
 
     @classmethod
@@ -36,58 +32,44 @@ class Goal:
             "smallest_safe",
             target_per_second=None,
             max_seconds=None,
-            direction=None,
-            tie=None,
         )
 
     @classmethod
-    def fastest_step(cls, *, tie: str) -> "Goal":
+    def fastest_step(cls) -> "Goal":
         return cls(
             "fastest_step",
             target_per_second=None,
             max_seconds=None,
-            direction=None,
-            tie=tie,
         )
 
     @classmethod
-    def best_value_rate(cls, *, tie: str) -> "Goal":
+    def best_value_rate(cls) -> "Goal":
         return cls(
             "best_value_rate",
             target_per_second=None,
             max_seconds=None,
-            direction=None,
-            tie=tie,
         )
 
     @classmethod
     def smallest_value_meeting_rate(
         cls,
         target_per_second: float,
-        *,
-        direction: str,
     ) -> "Goal":
         return cls(
             "smallest_value_meeting_rate",
             target_per_second=target_per_second,
             max_seconds=None,
-            direction=direction,
-            tie=None,
         )
 
     @classmethod
     def largest_value_under_latency(
         cls,
         max_seconds: float,
-        *,
-        direction: str,
     ) -> "Goal":
         return cls(
             "largest_value_under_latency",
             target_per_second=None,
             max_seconds=max_seconds,
-            direction=direction,
-            tie=None,
         )
 
     def requires_timing(self) -> bool:
@@ -107,12 +89,6 @@ class Goal:
         if self.max_seconds is not None:
             data["max_seconds"] = self.max_seconds
 
-        if self.direction is not None:
-            data["direction"] = self.direction
-
-        if self.tie is not None:
-            data["tie"] = self.tie
-
         return data
 
     def _validate(self) -> None:
@@ -129,33 +105,36 @@ class Goal:
             msg = f"unknown goal: {self.kind}"
             raise InvalidConfigurationError(msg)
 
-        if self.tie is not None and self.tie not in {"larger", "smaller"}:
-            msg = "tie must be larger or smaller"
-            raise InvalidConfigurationError(msg)
-
-        if self.kind in {"fastest_step", "best_value_rate"} and self.tie is None:
-            msg = "tie is required"
-            raise InvalidConfigurationError(msg)
-
-        if self.kind == "smallest_value_meeting_rate":
+        if self.kind in {
+            "largest_safe",
+            "smallest_safe",
+            "fastest_step",
+            "best_value_rate",
+        }:
+            self._validate_no_target()
+        elif self.kind == "smallest_value_meeting_rate":
             self._validate_rate_target()
-
-        if self.kind == "largest_value_under_latency":
+        else:
             self._validate_latency_target()
 
+    def _validate_no_target(self) -> None:
+        if self.target_per_second is not None or self.max_seconds is not None:
+            msg = f"{self.kind} does not accept a target"
+            raise InvalidConfigurationError(msg)
+
     def _validate_rate_target(self) -> None:
+        if self.max_seconds is not None:
+            msg = "smallest_value_meeting_rate does not accept max_seconds"
+            raise InvalidConfigurationError(msg)
+
         _require_positive_number(self.target_per_second, "target_per_second")
 
-        if self.direction not in {"increasing", "decreasing"}:
-            msg = "rate direction must be increasing or decreasing"
-            raise InvalidConfigurationError(msg)
-
     def _validate_latency_target(self) -> None:
-        _require_positive_number(self.max_seconds, "max_seconds")
-
-        if self.direction not in {"increasing_latency", "decreasing_latency"}:
-            msg = "latency direction must be increasing_latency or decreasing_latency"
+        if self.target_per_second is not None:
+            msg = "largest_value_under_latency does not accept target_per_second"
             raise InvalidConfigurationError(msg)
+
+        _require_positive_number(self.max_seconds, "max_seconds")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Goal):
@@ -168,7 +147,11 @@ class Goal:
 
 
 def _require_positive_number(value: object, field: str) -> None:
-    if (type(value) is int or type(value) is float) and value > 0:
+    if (
+        (type(value) is int or type(value) is float)
+        and math.isfinite(value)
+        and value > 0
+    ):
         return
 
     msg = f"{field} must be positive"

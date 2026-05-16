@@ -1,14 +1,14 @@
+import math
 from typing import Protocol
 
 from autobatch._domain import Domain
 from autobatch._errors import (
     InvalidConfigurationError,
     NoSafeValueError,
-    ProbeTimeoutError,
-    WorkloadError,
+    ProbeError,
 )
 from autobatch._goals import Goal
-from autobatch._protocol import ProbeOutcome
+from autobatch._probe import ProbeOutcome
 from autobatch._timing import median_seconds
 
 
@@ -29,14 +29,10 @@ def search(
         return _smallest_safe(domain=domain, probe=runner)
 
     if goal.kind == "fastest_step":
-        return _fastest_step(domain=domain, goal=goal, probe=runner)
+        return _fastest_step(domain=domain, probe=runner)
 
     if goal.kind == "best_value_rate":
-        return _best_value_rate(
-            domain=domain,
-            goal=goal,
-            probe=runner,
-        )
+        return _best_value_rate(domain=domain, probe=runner)
 
     if goal.kind == "smallest_value_meeting_rate":
         return _target_rate(domain=domain, goal=goal, probe=runner)
@@ -97,10 +93,8 @@ def _smallest_safe(*, domain: Domain, probe: _ProbeRunner) -> int:
 def _fastest_step(
     *,
     domain: Domain,
-    goal: Goal,
     probe: _ProbeRunner,
 ) -> int:
-    tie = _required_tie(goal)
     best_value = None
     best_seconds = None
 
@@ -110,12 +104,11 @@ def _fastest_step(
         if outcome.status == "unsafe":
             continue
 
-        _raise_for_bad_outcome(outcome)
+        raise_for_bad_outcome(outcome)
         seconds = _timing_value(outcome)
         better = best_seconds is None or seconds < best_seconds
-        tied = best_value is not None and seconds == best_seconds
 
-        if better or (tied and _tie_wins(value=value, best_value=best_value, tie=tie)):
+        if better:
             best_value = value
             best_seconds = seconds
 
@@ -129,10 +122,8 @@ def _fastest_step(
 def _best_value_rate(
     *,
     domain: Domain,
-    goal: Goal,
     probe: _ProbeRunner,
 ) -> int:
-    tie = _required_tie(goal)
     best_value = None
     best_rate = None
 
@@ -142,12 +133,11 @@ def _best_value_rate(
         if outcome.status == "unsafe":
             continue
 
-        _raise_for_bad_outcome(outcome)
+        raise_for_bad_outcome(outcome)
         rate = value / _timing_value(outcome)
         better = best_rate is None or rate > best_rate
-        tied = best_value is not None and rate == best_rate
 
-        if better or (tied and _tie_wins(value=value, best_value=best_value, tie=tie)):
+        if better:
             best_value = value
             best_rate = rate
 
@@ -172,10 +162,8 @@ def _target_rate(*, domain: Domain, goal: Goal, probe: _ProbeRunner) -> int:
             observations.append((value, None))
             continue
 
-        _raise_for_bad_outcome(outcome)
+        raise_for_bad_outcome(outcome)
         observations.append((value, value / _timing_value(outcome)))
-
-    _check_metric_direction(goal=goal, observations=observations)
 
     for value, rate in observations:
         if rate is not None and rate >= goal.target_per_second:
@@ -199,10 +187,9 @@ def _target_latency(*, domain: Domain, goal: Goal, probe: _ProbeRunner) -> int:
             observations.append((value, None))
             continue
 
-        _raise_for_bad_outcome(outcome)
+        raise_for_bad_outcome(outcome)
         observations.append((value, _timing_value(outcome)))
 
-    _check_metric_direction(goal=goal, observations=observations)
     best = None
 
     for value, seconds in observations:
@@ -223,33 +210,29 @@ def _outcome_is_safe(outcome: ProbeOutcome) -> bool:
     if outcome.status == "unsafe":
         return False
 
-    _raise_for_bad_outcome(outcome)
+    raise_for_bad_outcome(outcome)
 
     return False
 
 
-def _raise_for_bad_outcome(outcome: ProbeOutcome) -> None:
+def raise_for_bad_outcome(outcome: ProbeOutcome) -> None:
     if outcome.status == "failed":
         detail = outcome.exception_message
 
         if detail is None:
             detail = _failure_reason(outcome)
 
-        raise WorkloadError(detail)
-
-    if outcome.status == "timeout":
-        msg = "candidate timed out without OOM evidence"
-        raise ProbeTimeoutError(msg)
+        raise ProbeError(detail)
 
     if outcome.status not in {"safe", "unsafe"}:
         msg = f"unknown probe outcome status: {outcome.status}"
-        raise WorkloadError(msg)
+        raise ProbeError(msg)
 
 
 def _failure_reason(outcome: ProbeOutcome) -> str:
     if outcome.reason is None:
         msg = "failed outcome is missing a reason"
-        raise WorkloadError(msg)
+        raise ProbeError(msg)
 
     return outcome.reason
 
@@ -257,54 +240,8 @@ def _failure_reason(outcome: ProbeOutcome) -> str:
 def _timing_value(outcome: ProbeOutcome) -> float:
     seconds = median_seconds(outcome.timing_seconds)
 
-    if seconds <= 0:
-        msg = "timing sample must be positive"
-        raise WorkloadError(msg)
+    if not math.isfinite(seconds) or seconds <= 0:
+        msg = "timing sample must be finite and positive"
+        raise ProbeError(msg)
 
     return seconds
-
-
-def _tie_wins(*, value: int, best_value: int, tie: str) -> bool:
-    if tie == "larger":
-        return value > best_value
-
-    return value < best_value
-
-
-def _required_tie(goal: Goal) -> str:
-    if goal.tie in {"larger", "smaller"}:
-        return goal.tie
-
-    msg = "tie is required"
-    raise InvalidConfigurationError(msg)
-
-
-def _check_metric_direction(
-    *, goal: Goal, observations: list[tuple[int, float | None]]
-) -> None:
-    previous = None
-
-    for _, metric in observations:
-        if metric is None:
-            continue
-
-        if previous is not None and _violates_direction(
-            goal=goal,
-            previous=previous,
-            current=metric,
-        ):
-            msg = "observed metric violates declared direction"
-            raise InvalidConfigurationError(msg)
-
-        previous = metric
-
-
-def _violates_direction(*, goal: Goal, previous: float, current: float) -> bool:
-    if goal.direction in {"increasing", "increasing_latency"}:
-        return current < previous
-
-    if goal.direction in {"decreasing", "decreasing_latency"}:
-        return current > previous
-
-    msg = "goal direction is required"
-    raise InvalidConfigurationError(msg)

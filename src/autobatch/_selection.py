@@ -1,30 +1,41 @@
-from collections.abc import Mapping
+from typing import Protocol
 
-from autobatch._cache import Cache
 from autobatch._config import FindConfig
-from autobatch._search import _ProbeRunner, search
+from autobatch._errors import InvalidConfigurationError
+from autobatch._search import _ProbeRunner, raise_for_bad_outcome, search
+
+
+class _Cache(Protocol):
+    def read_value(self) -> int | None: ...
+
+    def write_value(self, value: int) -> None: ...
 
 
 def select_value(
     *,
     config: FindConfig,
     probe: _ProbeRunner,
-    cache: Cache,
-    cache_identity: Mapping[str, object],
+    cache: _Cache,
 ) -> int:
     cached = cache.read_value()
 
-    if cached is not None and cached in config.domain.values:
-        outcome = probe.probe(cached, timed=False)
+    if not config.goal.requires_timing() and cached is not None:
+        if cached not in config.domain.values:
+            msg = "cached value is outside the declared domain"
+            raise InvalidConfigurationError(msg)
 
-        if outcome.status == "safe" and not config.goal.requires_timing():
+        outcome = probe.probe(cached, timed=config.goal.requires_timing())
+
+        if outcome.status == "safe":
             return cached
+
+        raise_for_bad_outcome(outcome)
 
     value = search(
         domain=config.domain,
         goal=config.goal,
         runner=probe,
     )
-    cache.write_value(value, identity=cache_identity)
+    cache.write_value(value)
 
     return value

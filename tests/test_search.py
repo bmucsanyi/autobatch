@@ -3,13 +3,11 @@ import pytest
 from autobatch._config import FindConfig, validate_config
 from autobatch._domain import Domain
 from autobatch._errors import (
-    InvalidConfigurationError,
     NoSafeValueError,
-    ProbeTimeoutError,
-    WorkloadError,
+    ProbeError,
 )
 from autobatch._goals import Goal
-from autobatch._protocol import ProbeOutcome
+from autobatch._probe import ProbeOutcome
 from autobatch._search import search
 
 
@@ -39,19 +37,19 @@ class FakeProbe:
         )
 
 
+def noop_probe(value: int) -> None:
+    _ = value
+
+
 def make_config(domain: Domain, goal: Goal) -> FindConfig:
     return validate_config(
-        workload="tests.fixtures.probes:step",
+        probe=noop_probe,
         values=domain.values,
         goal=goal,
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=("search-config", domain.values, goal.kind),
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir="cache",
     )
 
 
@@ -93,7 +91,7 @@ def test_largest_safe_raises_when_none_safe() -> None:
 def test_fastest_step_checks_every_candidate() -> None:
     settings = make_config(
         Domain([16, 32, 64]),
-        Goal.fastest_step(tie="smaller"),
+        Goal.fastest_step(),
     )
     probe = FakeProbe({16, 32, 64}, timings={16: (0.4,), 32: (0.2,), 64: (0.3,)})
 
@@ -106,7 +104,7 @@ def test_fastest_step_checks_every_candidate() -> None:
 def test_best_value_rate_uses_value_over_seconds() -> None:
     settings = make_config(
         Domain([1, 2, 3]),
-        Goal.best_value_rate(tie="larger"),
+        Goal.best_value_rate(),
     )
     probe = FakeProbe({1, 2, 3}, timings={1: (1.0,), 2: (0.75,), 3: (2.0,)})
 
@@ -115,18 +113,57 @@ def test_best_value_rate_uses_value_over_seconds() -> None:
     assert value == 2
 
 
-def test_target_rate_checks_declared_direction() -> None:
-    goal = Goal.smallest_value_meeting_rate(
-        target_per_second=1.0, direction="increasing"
+def test_fastest_step_keeps_first_value_on_equal_timing() -> None:
+    settings = make_config(
+        Domain([16, 32]),
+        Goal.fastest_step(),
     )
-    settings = make_config(Domain([1, 2]), goal)
-    probe = FakeProbe({1, 2}, timings={1: (1.0,), 2: (4.0,)})
+    probe = FakeProbe({16, 32}, timings={16: (0.2,), 32: (0.2,)})
 
-    with pytest.raises(InvalidConfigurationError):
-        run_search(settings, probe)
+    value = run_search(settings, probe)
+
+    assert value == 16
 
 
-def test_failed_probe_raises_workload_error() -> None:
+def test_best_value_rate_keeps_first_value_on_equal_rate() -> None:
+    settings = make_config(
+        Domain([1, 2]),
+        Goal.best_value_rate(),
+    )
+    probe = FakeProbe({1, 2}, timings={1: (1.0,), 2: (2.0,)})
+
+    value = run_search(settings, probe)
+
+    assert value == 1
+
+
+def test_target_rate_returns_smallest_safe_value_meeting_target() -> None:
+    goal = Goal.smallest_value_meeting_rate(target_per_second=2.0)
+    settings = make_config(Domain([1, 2, 3]), goal)
+    probe = FakeProbe(
+        {1, 2, 3},
+        timings={1: (1.0,), 2: (0.75,), 3: (1.0,)},
+    )
+
+    value = run_search(settings, probe)
+
+    assert value == 2
+
+
+def test_target_latency_returns_largest_safe_value_under_limit() -> None:
+    goal = Goal.largest_value_under_latency(max_seconds=0.8)
+    settings = make_config(Domain([1, 2, 3]), goal)
+    probe = FakeProbe(
+        {1, 2, 3},
+        timings={1: (0.2,), 2: (0.5,), 3: (0.9,)},
+    )
+
+    value = run_search(settings, probe)
+
+    assert value == 2
+
+
+def test_failed_probe_raises_probe_error() -> None:
     settings = make_config(Domain([1]), Goal.largest_safe())
 
     class FailedProbe:
@@ -141,7 +178,7 @@ def test_failed_probe_raises_workload_error() -> None:
                 exception_message="boom",
             )
 
-    with pytest.raises(WorkloadError):
+    with pytest.raises(ProbeError):
         search(
             settings.domain,
             settings.goal,
@@ -149,19 +186,17 @@ def test_failed_probe_raises_workload_error() -> None:
         )
 
 
-def test_timeout_probe_raises_probe_timeout() -> None:
-    settings = make_config(Domain([1]), Goal.largest_safe())
+def test_timing_goal_rejects_nan_timing_sample() -> None:
+    settings = make_config(Domain([1]), Goal.fastest_step())
+    probe = FakeProbe({1}, timings={1: (float("nan"),)})
 
-    class TimeoutProbe:
-        @staticmethod
-        def probe(value: int, *, timed: bool) -> ProbeOutcome:
-            _ = timed
+    with pytest.raises(ProbeError, match="finite"):
+        run_search(settings, probe)
 
-            return ProbeOutcome(status="timeout", value=value, reason="timeout")
 
-    with pytest.raises(ProbeTimeoutError):
-        search(
-            settings.domain,
-            settings.goal,
-            runner=TimeoutProbe(),
-        )
+def test_timing_goal_rejects_infinite_timing_sample() -> None:
+    settings = make_config(Domain([1]), Goal.best_value_rate())
+    probe = FakeProbe({1}, timings={1: (float("inf"),)})
+
+    with pytest.raises(ProbeError, match="finite"):
+        run_search(settings, probe)

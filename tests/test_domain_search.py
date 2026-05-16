@@ -4,7 +4,7 @@ from autobatch._config import FindConfig, validate_config
 from autobatch._domain import Domain
 from autobatch._errors import NoSafeValueError
 from autobatch._goals import Goal
-from autobatch._protocol import ProbeOutcome
+from autobatch._probe import ProbeOutcome
 from autobatch._search import search
 
 
@@ -21,19 +21,19 @@ class Probe:
         return ProbeOutcome(status="unsafe", value=value, reason="test")
 
 
+def noop_probe(value: int) -> None:
+    _ = value
+
+
 def config(domain: Domain) -> FindConfig:
     return validate_config(
-        workload="tests.fixtures.probes:step",
+        probe=noop_probe,
         values=domain.values,
         goal=Goal.largest_safe(),
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=("domain-search", domain.values),
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir="cache",
     )
 
 

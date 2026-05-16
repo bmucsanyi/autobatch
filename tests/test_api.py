@@ -1,13 +1,12 @@
-from pathlib import Path
-
 import pytest
 
 import autobatch
 import autobatch._api as api
 from autobatch._cache import Cache
 from autobatch._config import FindConfig, validate_config
+from autobatch._errors import InvalidConfigurationError
 from autobatch._goals import Goal
-from autobatch._protocol import ProbeOutcome
+from autobatch._probe import ProbeOutcome
 
 
 class FakeRunner:
@@ -40,47 +39,36 @@ class TimingRunner:
         )
 
 
-def _drop_torchrun_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("RANK", raising=False)
-    monkeypatch.delenv("WORLD_SIZE", raising=False)
+def noop_probe(value: int) -> None:
+    _ = value
 
 
-def _make_config(values: tuple[int, ...], goal: Goal, cache_dir: Path) -> FindConfig:
+def _make_config(values: tuple[int, ...], goal: Goal, cache_key: object) -> FindConfig:
     return validate_config(
-        workload="tests.fixtures.probes:step",
+        probe=noop_probe,
         values=values,
         goal=goal,
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=cache_key,
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir=cache_dir,
     )
 
 
 def test_find_returns_integer_boundary(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     runner = FakeRunner(3)
-    monkeypatch.setattr(api, "SubprocessProbeRunner", lambda _: runner)
-    _drop_torchrun_env(monkeypatch)
+    monkeypatch.setattr(api, "_runner_for_process", lambda _: runner)
 
     value = autobatch.find(
-        workload="tests.fixtures.probes:step",
+        noop_probe,
         values=[1, 2, 3, 4],
         goal=autobatch.Goal.largest_safe(),
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=("api-boundary", "a"),
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir=tmp_path,
     )
 
     assert value == 3
@@ -89,60 +77,72 @@ def test_find_returns_integer_boundary(
 
 def test_find_searches_again_when_cached_value_revalidates_as_unsafe(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     runner = FakeRunner(safe_until=2)
-    monkeypatch.setattr(api, "SubprocessProbeRunner", lambda _: runner)
-    _drop_torchrun_env(monkeypatch)
+    monkeypatch.setattr(api, "_runner_for_process", lambda _: runner)
 
-    config = _make_config((1, 2, 3, 4), Goal.largest_safe(), tmp_path)
-    cache_key = api.cache_key_for_config(config)
-    Cache(tmp_path, cache_key).write_value(3, identity={})
+    cache_key = ("api-revalidate", "a")
+    config = _make_config((1, 2, 3, 4), Goal.largest_safe(), cache_key)
+    Cache(config.cache_key).write_value(3)
 
     value = autobatch.find(
-        workload="tests.fixtures.probes:step",
+        noop_probe,
         values=[1, 2, 3, 4],
         goal=autobatch.Goal.largest_safe(),
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=cache_key,
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir=tmp_path,
     )
 
     assert value == 2
     assert runner.calls[0] == 3
 
 
-def test_timing_goal_ignores_cache_for_selection(
+def test_find_rejects_cached_value_outside_domain(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+) -> None:
+    runner = FakeRunner(safe_until=4)
+    monkeypatch.setattr(api, "_runner_for_process", lambda _: runner)
+
+    cache_key = ("api-cache-domain", "a")
+    config = _make_config((1, 2, 3), Goal.largest_safe(), cache_key)
+    Cache(config.cache_key).write_value(4)
+
+    with pytest.raises(InvalidConfigurationError, match="outside"):
+        autobatch.find(
+            noop_probe,
+            values=[1, 2, 3],
+            goal=autobatch.Goal.largest_safe(),
+            cache_key=cache_key,
+            warmup_steps=1,
+            measure_steps=1,
+            devices=[0],
+        )
+
+    assert runner.calls == []
+
+
+def test_timing_goal_revalidates_cached_value_with_timing(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = TimingRunner()
-    monkeypatch.setattr(api, "SubprocessProbeRunner", lambda _: runner)
-    _drop_torchrun_env(monkeypatch)
+    monkeypatch.setattr(api, "_runner_for_process", lambda _: runner)
 
-    goal = Goal.best_value_rate(tie="larger")
-    config = _make_config((1, 2, 3), goal, tmp_path)
-    cache_key = api.cache_key_for_config(config)
-    Cache(tmp_path, cache_key).write_value(1, identity={})
+    goal = Goal.best_value_rate()
+    cache_key = ("api-timing-cache", "a")
+    config = _make_config((1, 2, 3), goal, cache_key)
+    Cache(config.cache_key).write_value(1)
 
     value = autobatch.find(
-        workload="tests.fixtures.probes:step",
+        noop_probe,
         values=[1, 2, 3],
         goal=goal,
-        kwargs={},
-        reserve_fraction=0.05,
-        reserve_bytes=0,
+        cache_key=cache_key,
         warmup_steps=1,
         measure_steps=1,
-        timeout_s=1.0,
         devices=[0],
-        cache_dir=tmp_path,
     )
 
     assert value == 3
-    assert [call[0] for call in runner.calls] == [1, 1, 2, 3]
+    assert runner.calls == [(1, True), (2, True), (3, True)]

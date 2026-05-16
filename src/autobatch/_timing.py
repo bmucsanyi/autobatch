@@ -4,11 +4,11 @@ from collections.abc import Callable, Sequence
 import torch
 
 from autobatch._cuda import synchronize_devices
-from autobatch._errors import WorkloadError
+from autobatch._errors import ProbeError
 
 
 def run_step(
-    step: Callable[[], object],
+    step: Callable[[], None],
     *,
     devices: Sequence[int],
     timed: bool,
@@ -28,7 +28,7 @@ def run_step(
 def median_seconds(samples: Sequence[float]) -> float:
     if len(samples) == 0:
         msg = "timing samples must be nonempty"
-        raise WorkloadError(msg)
+        raise ProbeError(msg)
 
     ordered = sorted(samples)
     middle = len(ordered) // 2
@@ -39,7 +39,7 @@ def median_seconds(samples: Sequence[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
-def _run_step_with_cuda_event(step: Callable[[], object], device: int) -> float:
+def _run_step_with_cuda_event(step: Callable[[], None], device: int) -> float:
     synchronize_devices([device])
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -52,7 +52,7 @@ def _run_step_with_cuda_event(step: Callable[[], object], device: int) -> float:
 
 
 def _run_step_with_host_clock(
-    step: Callable[[], object], devices: Sequence[int]
+    step: Callable[[], None], devices: Sequence[int]
 ) -> float:
     synchronize_devices(devices)
     start = time.perf_counter()

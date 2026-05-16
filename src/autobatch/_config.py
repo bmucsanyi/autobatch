@@ -1,80 +1,68 @@
-from collections.abc import Mapping, Sequence
+import json
+import math
+from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TypeGuard
 
-from autobatch._cuda import validate_memory_policy, validate_step_counts
+from autobatch._cuda import validate_step_counts
 from autobatch._domain import Domain
 from autobatch._errors import InvalidConfigurationError
 from autobatch._goals import Goal
-from autobatch._workload import split_import_path
+from autobatch._types import StagedProbe
 
 
 @dataclass(kw_only=True)
 class FindConfig:
-    workload: str
+    probe: Callable[[int], None] | StagedProbe
     domain: Domain
     goal: Goal
-    kwargs: Mapping[str, object]
-    reserve_fraction: float
-    reserve_bytes: int
+    cache_key: Hashable
     warmup_steps: int
     measure_steps: int
-    timeout_s: float
     devices: list[int]
-    cache_dir: Path
-
-    def __post_init__(self) -> None:
-        self.kwargs = dict(self.kwargs)
 
 
 def validate_config(
     *,
-    workload: str,
+    probe: object,
     values: Sequence[int],
     goal: Goal,
-    kwargs: Mapping[str, object],
-    reserve_fraction: float,
-    reserve_bytes: int,
+    cache_key: Hashable,
     warmup_steps: int,
     measure_steps: int,
-    timeout_s: float,
     devices: object,
-    cache_dir: str | Path,
 ) -> FindConfig:
-    _validate_workload(workload)
+    selected_probe = _validate_probe(probe)
     selected_devices = _validate_devices(devices)
     _validate_goal(goal)
-    validate_memory_policy(
-        reserve_fraction=reserve_fraction,
-        reserve_bytes=reserve_bytes,
-    )
+    _validate_cache_key(cache_key)
     validate_step_counts(warmup_steps=warmup_steps, measure_steps=measure_steps)
-    _validate_timeout(timeout_s)
-    _validate_kwargs(kwargs)
     selected_domain = Domain(values)
-    selected_cache_dir = Path(cache_dir)
 
     return FindConfig(
-        workload=workload,
+        probe=selected_probe,
         domain=selected_domain,
         goal=goal,
-        kwargs=kwargs,
-        reserve_fraction=reserve_fraction,
-        reserve_bytes=reserve_bytes,
+        cache_key=cache_key,
         warmup_steps=warmup_steps,
         measure_steps=measure_steps,
-        timeout_s=float(timeout_s),
         devices=selected_devices,
-        cache_dir=selected_cache_dir,
     )
 
 
-def _validate_workload(workload: object) -> None:
-    if type(workload) is not str:
-        msg = "workload must be a string"
+def _validate_probe(probe: object) -> Callable[[int], None] | StagedProbe:
+    if isinstance(probe, StagedProbe):
+        return probe
+
+    if not _is_probe(probe):
+        msg = "probe must be callable"
         raise InvalidConfigurationError(msg)
 
-    split_import_path(workload)
+    return probe
+
+
+def _is_probe(probe: object) -> TypeGuard[Callable[[int], None]]:
+    return callable(probe)
 
 
 def _validate_goal(goal: object) -> None:
@@ -104,17 +92,36 @@ def _validate_devices(devices: object) -> list[int]:
     return selected_devices
 
 
-def _validate_timeout(timeout_s: object) -> None:
-    if type(timeout_s) is not float and type(timeout_s) is not int:
-        msg = "timeout_s must be a number"
+def _validate_cache_key(cache_key: object) -> None:
+    if not isinstance(cache_key, Hashable):
+        msg = "cache_key must be hashable"
         raise InvalidConfigurationError(msg)
 
-    if timeout_s <= 0:
-        msg = "timeout_s must be positive"
-        raise InvalidConfigurationError(msg)
+    cache_key_identity(cache_key)
 
 
-def _validate_kwargs(kwargs: Mapping[str, object]) -> None:
-    if not isinstance(kwargs, Mapping):
-        msg = "kwargs must be a mapping"
-        raise InvalidConfigurationError(msg)
+def cache_key_identity(cache_key: object) -> str:
+    return json.dumps(
+        cache_key_to_json(cache_key),
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def cache_key_to_json(cache_key: object) -> object:
+    if type(cache_key) is float:
+        if not math.isfinite(cache_key):
+            msg = "cache_key float values must be finite"
+            raise InvalidConfigurationError(msg)
+
+        return cache_key
+
+    if cache_key is None or type(cache_key) in {bool, int, str}:
+        return cache_key
+
+    if type(cache_key) is tuple:
+        return [cache_key_to_json(item) for item in cache_key]
+
+    msg = "cache_key must contain only JSON scalar values and tuples"
+    raise InvalidConfigurationError(msg)

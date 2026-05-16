@@ -1,4 +1,4 @@
-"""Find one integer CUDA setting for a PyTorch workload."""
+"""Find one integer CUDA setting for a PyTorch probe."""
 
 from autobatch._api import find
 from autobatch._errors import (
@@ -6,10 +6,10 @@ from autobatch._errors import (
     DistributedError,
     InvalidConfigurationError,
     NoSafeValueError,
-    ProbeTimeoutError,
-    WorkloadError,
+    ProbeError,
 )
 from autobatch._goals import Goal
+from autobatch._types import ProbeStage, StagedProbe
 
 __all__ = [
     "AutobatchError",
@@ -17,7 +17,8 @@ __all__ = [
     "Goal",
     "InvalidConfigurationError",
     "NoSafeValueError",
-    "ProbeTimeoutError",
-    "WorkloadError",
+    "ProbeError",
+    "ProbeStage",
+    "StagedProbe",
     "find",
 ]

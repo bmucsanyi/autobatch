@@ -12,7 +12,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Natural Language :: English",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Information Analysis",
@@ -140,13 +140,12 @@ ignore = [
     # being said, it is important to only use `Any` when all other possibilities have
     # been exhausted
     "ANN401",
-    # We do not annotate __init__ methods -- args are specified in the class docstring
+    # __init__ docstrings usually repeat the class docstring
     "D107",
-    # In-place assigments are not always possible in torch or jax
+    # In-place assignments are not always possible in torch or jax
     "PLR6104",
     # Assignments before return can emphasize the code's semantic structure
     "RET504",
-    "S403",
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
@@ -160,18 +159,9 @@ ignore = [
     "D103",
     "D104",
     "D105",
-    "ANN201",  # Type annotations are not required in tests
-    "ANN202",
-    "ANN204",
-    "ANN205",
-    "ANN001",
-    "ANN002",
-    "ANN003",
     "PLR0915", # Tests can contain many statements and many local variables
     "PLR2004",
     "PLR0912",
-    "PLR0912",
-    "PLR0914",
     "PLR0914",
     "PLR0913",
     "PLR0917",

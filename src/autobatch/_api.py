@@ -1,89 +1,87 @@
-import os
-from collections.abc import Iterable, Mapping
-from pathlib import Path
+from collections.abc import Callable, Hashable, Iterable
 
-from autobatch import _dist_parent
 from autobatch._cache import Cache
 from autobatch._config import FindConfig, validate_config
-from autobatch._fingerprint import (
-    distributed_fingerprint,
-    environment_fingerprint,
-    identity_key,
-    runtime_fingerprint,
-    workload_source_fingerprint,
+from autobatch._distributed import (
+    DistributedCache,
+    TorchCollectives,
+    distributed_is_initialized,
+    validate_distributed_config,
+    validate_distributed_selection,
 )
+from autobatch._errors import DistributedError
 from autobatch._goals import Goal
-from autobatch._process import SubprocessProbeRunner
+from autobatch._probe import InProcessProbeRunner
+from autobatch._search import _ProbeRunner
 from autobatch._selection import select_value
+from autobatch._staged import DistributedStagedProbeRunner
+from autobatch._types import StagedProbe
 
 
 def find(
-    workload: str,
+    probe: Callable[[int], None] | StagedProbe,
     *,
     values: Iterable[int],
     goal: Goal,
-    reserve_fraction: float,
-    reserve_bytes: int,
+    cache_key: Hashable,
     warmup_steps: int,
     measure_steps: int,
-    timeout_s: float,
-    kwargs: Mapping[str, object],
-    devices: object,
-    cache_dir: str | Path,
+    devices: list[int],
 ) -> int:
     config = validate_config(
-        workload=workload,
+        probe=probe,
         values=tuple(values),
         goal=goal,
-        kwargs=kwargs,
-        reserve_fraction=reserve_fraction,
-        reserve_bytes=reserve_bytes,
+        cache_key=cache_key,
         warmup_steps=warmup_steps,
         measure_steps=measure_steps,
-        timeout_s=timeout_s,
         devices=devices,
-        cache_dir=cache_dir,
     )
-    cache_identity = _identity_for_config(config)
-    cache_key = identity_key(cache_identity)
 
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        return _dist_parent.find_distributed(
-            config,
-            cache_key=cache_key,
-            cache_identity=cache_identity,
-        )
+    if distributed_is_initialized():
+        return _find_distributed(config)
 
+    return _find_single_process(config)
+
+
+def _find_single_process(config: FindConfig) -> int:
     return select_value(
         config=config,
-        probe=SubprocessProbeRunner(config),
-        cache=Cache(config.cache_dir, cache_key),
-        cache_identity=cache_identity,
+        probe=_runner_for_process(config),
+        cache=_cache_for_process(config),
     )
 
 
-def cache_key_for_config(config: FindConfig) -> str:
-    return identity_key(_identity_for_config(config))
+def _find_distributed(config: FindConfig) -> int:
+    collectives = TorchCollectives()
+
+    try:
+        validate_distributed_config(config, collectives)
+        value = select_value(
+            config=config,
+            probe=_distributed_runner(config, collectives),
+            cache=DistributedCache(Cache(config.cache_key), collectives),
+        )
+
+        return validate_distributed_selection(value, collectives)
+    finally:
+        collectives.close()
 
 
-def _identity_for_config(config: FindConfig) -> dict[str, object]:
-    return {
-        "workload": config.workload,
-        "workload_source": workload_source_fingerprint(config.workload),
-        "kwargs": config.kwargs,
-        "domain": {"values": list(config.domain.values)},
-        "goal": config.goal.to_json(),
-        "memory": {
-            "reserve_fraction": config.reserve_fraction,
-            "reserve_bytes": config.reserve_bytes,
-        },
-        "steps": {
-            "warmup_steps": config.warmup_steps,
-            "measure_steps": config.measure_steps,
-        },
-        "timeout_s": config.timeout_s,
-        "devices": config.devices,
-        "runtime": runtime_fingerprint(),
-        "environment": environment_fingerprint(),
-        "distributed": distributed_fingerprint(),
-    }
+def _distributed_runner(
+    config: FindConfig,
+    collectives: TorchCollectives,
+) -> _ProbeRunner:
+    if isinstance(config.probe, StagedProbe):
+        return DistributedStagedProbeRunner(config, collectives)
+
+    msg = "distributed find requires a StagedProbe"
+    raise DistributedError(msg)
+
+
+def _runner_for_process(config: FindConfig) -> _ProbeRunner:
+    return InProcessProbeRunner(config)
+
+
+def _cache_for_process(config: FindConfig) -> Cache:
+    return Cache(config.cache_key)

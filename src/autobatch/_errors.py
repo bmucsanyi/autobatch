@@ -10,11 +10,7 @@ class NoSafeValueError(AutobatchError):
     pass
 
 
-class WorkloadError(AutobatchError):
-    pass
-
-
-class ProbeTimeoutError(AutobatchError):
+class ProbeError(AutobatchError):
     pass
 
 
