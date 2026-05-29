@@ -32,6 +32,39 @@ goal results so later calls in the same process skip the search.
 
 A few things to keep in mind about the cache key. It must be a hashable JSON scalar, or a tuple of such scalars. Put everything that changes how the probe behaves into it, because anything you leave out risks getting a stale answer. Memory-only goals revalidate a cache hit before trusting it; timing goals ignore cache entries and scan the whole declared range.
 
+## Candidate tables
+
+The integer can also be an index into an explicit table of workload settings. This is useful when one candidate changes several knobs at once:
+
+```python
+import autobatch
+
+
+candidates = {
+    1: {"token_block": 64, "attention_block": 1_000_000},
+    2: {"token_block": 64, "attention_block": 2_000_000},
+    3: {"token_block": 128, "attention_block": 1_000_000},
+}
+
+
+def probe(value: int) -> None:
+    run_step(**candidates[value])
+
+
+value = autobatch.find(
+    probe,
+    values=tuple(candidates),
+    goal=autobatch.Goal.fastest_step(),
+    cache_key=("candidate-table", model_name, dataset_name),
+    warmup_steps=1,
+    measure_steps=3,
+    devices=[0],
+)
+chosen = candidates[value]
+```
+
+For `Goal.fastest_step()`, `autobatch` measures every declared value and skips values that OOM, so the table can mix settings whose memory use is not ordered by index. For binary-search goals such as `Goal.largest_safe()`, order the table so feasibility is monotone.
+
 ## Distributed
 
 For data-parallel runs, every rank calls `find` with the same domain, goal, cache key, step counts, and number of monitored devices. `autobatch` checks that agreement before it starts probing, and checks the selected value again before returning it, so a misconfigured rank fails loudly instead of quietly diverging.
